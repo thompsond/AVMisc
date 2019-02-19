@@ -698,6 +698,7 @@ public class AVMisc implements NativeKeyListener {
 				default:
 					break;
 			}
+			// Check when the shift key is pressed
 			if(event.getKeyCode() == NativeKeyEvent.VC_SHIFT) {
 				shiftIsDown = true;
 			}
