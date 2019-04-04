@@ -444,6 +444,7 @@ public class AVMisc implements NativeKeyListener {
 			}
 			// Continue if the server connection attempt was successful
 			else {
+				ftp.setFileType(FTPClient.BINARY_FILE_TYPE);
 				// Upload a file
 				System.out.print("Enter the path of the file to upload: ");
 				String filePath = sc.nextLine();
