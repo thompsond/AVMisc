@@ -352,14 +352,16 @@ public class AVMisc implements NativeKeyListener {
 			
 			recordingVideoThread = new Thread() {
 				public void run() {
+					String fileName = String.format("Video_%s.mp4", dtf.format(LocalDateTime.now()));
+					Webcam webcam = null;
+					AWTSequenceEncoder encoder = null;
 					try {
-						String fileName = String.format("Video_%s.mp4", dtf.format(LocalDateTime.now()));
 						File file = new File(fileName);
-						Webcam webcam = Webcam.getDefault();
+						webcam = Webcam.getDefault();
 						recordingVideo.set(true);
 						webcam.open();
 						
-						AWTSequenceEncoder encoder = AWTSequenceEncoder.createSequenceEncoder(file, 25);
+						encoder = AWTSequenceEncoder.createSequenceEncoder(file, 25);
 						int framesToEncode = seconds * 50;
 						BufferedImage image = null;
 						System.out.println("Recording");
@@ -368,16 +370,20 @@ public class AVMisc implements NativeKeyListener {
 							image = webcam.getImage();
 							encoder.encodeImage(image);
 						}
-						webcam.close();
-						encoder.finish();
-						System.out.printf("Video saved as %s", fileName);
-						
 					}
 					catch (InputMismatchException | IOException e) {
 						System.out.println(e.getMessage());
 					}
 					finally {
 						recordingVideo.set(false);
+						webcam.close();
+						try {
+							encoder.finish();
+						}
+						catch (IOException e) {
+							System.out.println(e.getMessage());
+						}
+						System.out.printf("Video saved as %s", fileName);
 					}
 				}
 			};
