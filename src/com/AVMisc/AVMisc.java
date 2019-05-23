@@ -73,13 +73,14 @@ public class AVMisc implements NativeKeyListener {
 	private FTPClient ftp;
 	private String recordingAudioFileName;
 	private String playingAudioFileName;
+	private String streamingAudioIP;
 	private Audio audio;
 	private Recorder recorder;
-	private String streamingAudioIP;
 	private int streamingAudioPort;
 	private int recordingAudioTime;
 	private boolean KLIsRunning = false;
 	private boolean shiftIsDown = false;
+	private List<Webcam> webcams;
 	private Path klFilePath = Paths.get("file.txt");
 	private Path klLogFilePath = Paths.get("log.txt");
 	
@@ -97,7 +98,7 @@ public class AVMisc implements NativeKeyListener {
 		Logger logger = Logger.getLogger(GlobalScreen.class.getPackage().getName());
 		logger.setLevel(Level.OFF);
 		logger.setUseParentHandlers(false);
-		
+		webcams = Webcam.getWebcams();
 	}
 	
 	
@@ -188,12 +189,13 @@ public class AVMisc implements NativeKeyListener {
 	}
 	
 	private void listVideoDevices() {
-		List<Webcam> webcams = Webcam.getWebcams();
 		if(webcams.size() != 0) {
 			System.out.println("\n------------------------\n     VIDEO DEVICES\n------------------------");
-			webcams.forEach((webcam) -> {
-				System.out.printf("\tName: %s\n", webcam.getName());
-			});
+			for(int i = 0; i < webcams.size(); i++) {
+				Webcam webcam = webcams.get(i);
+				System.out.printf("\tID: %d, Name: %s\n", i, webcam.getName());
+			}
+			
 		}
 		else {
 			System.out.println("\nNo video devices");
@@ -206,11 +208,16 @@ public class AVMisc implements NativeKeyListener {
 	private void recordAudio(boolean streaming) {
 		if (!recordingAudio.get()) {
 			if(streaming) {
-				// Get the IP address and port
-				System.out.print("Enter the IP address of the server: ");
-				streamingAudioIP = sc.nextLine();
-				System.out.print("Enter the port number: ");
-				streamingAudioPort = Integer.parseInt(sc.nextLine());
+				try {
+					// Get the IP address and port
+					System.out.print("Enter the IP address of the server: ");
+					streamingAudioIP = sc.nextLine();
+					System.out.print("Enter the port number: ");
+					streamingAudioPort = Integer.parseInt(sc.nextLine());
+				} catch (NumberFormatException e) {
+					System.out.println(e.getMessage());
+					return;
+				}
 			}
 			else {
 				try {
@@ -347,31 +354,37 @@ public class AVMisc implements NativeKeyListener {
 	 */
 	private void recordVideo() {
 		if(!recordingVideo.get()) {
-			System.out.print("Enter the number of seconds to record (About 500 KB/S): ");
-			int seconds = sc.nextInt();
+			Webcam webcam;
+			int seconds;
+			try {
+				webcam = chooseWebcam();
+				System.out.print("Enter the number of seconds to record (About 500 KB/S): ");
+				seconds = sc.nextInt();
+			}
+			catch (WebcamException | InputMismatchException e) {
+				System.out.println(e.getMessage());
+				return;
+			}
 			
 			recordingVideoThread = new Thread() {
 				public void run() {
 					String fileName = String.format("Video_%s.mp4", dtf.format(LocalDateTime.now()));
-					Webcam webcam = null;
 					AWTSequenceEncoder encoder = null;
 					try {
 						File file = new File(fileName);
-						webcam = Webcam.getDefault();
 						recordingVideo.set(true);
 						webcam.open();
-						
 						encoder = AWTSequenceEncoder.createSequenceEncoder(file, 25);
 						int framesToEncode = seconds * 50;
 						BufferedImage image = null;
-						System.out.println("Recording");
+						System.out.println("Recording video...");
 						
 						for(int i = 0; i < framesToEncode/2; i++) {
 							image = webcam.getImage();
 							encoder.encodeImage(image);
 						}
 					}
-					catch (InputMismatchException | IOException e) {
+					catch (InputMismatchException | IndexOutOfBoundsException | IOException e) {
 						System.out.println(e.getMessage());
 					}
 					finally {
@@ -423,14 +436,10 @@ public class AVMisc implements NativeKeyListener {
 	 * Take a Snapshot
 	 */
 	private void takeSnapshot() {
-		List<Webcam> webcams = Webcam.getWebcams();
 		if(webcams.size() > 0) {
 			try {
-				System.out.print("Enter the webcam name: ");
-				String webcamName = sc.nextLine();
-				Webcam webcam = Webcam.getWebcamByName(webcamName);
+				Webcam webcam = chooseWebcam();
 				webcam.open();
-				
 				BufferedImage image = webcam.getImage();
 				String fileName = String.format("Snapshot_%s.png", dtf.format(LocalDateTime.now()));
 				ImageIO.write(image, "PNG", new File(fileName));
@@ -634,7 +643,7 @@ public class AVMisc implements NativeKeyListener {
 				System.out.printf("String data: %s\n", t.getTransferData(DataFlavor.stringFlavor));
 			}
 		}
-		catch(UnsupportedFlavorException  | IOException e) {
+		catch(UnsupportedFlavorException | IOException e) {
 			System.out.println(e.getMessage());
 		}
 	}
@@ -698,12 +707,23 @@ public class AVMisc implements NativeKeyListener {
 			return true;
 			
 		}
-		catch(IOException e) {
+		catch(IOException | InputMismatchException e) {
 			System.out.println(e.getMessage());
 			return false;
 		}
 	}
 
+	private Webcam chooseWebcam() {
+		try {
+			listVideoDevices();
+			System.out.print("Enter the ID of the webcam to use: ");
+			int ID = sc.nextInt();
+			return webcams.get(ID);
+		}
+		catch (IndexOutOfBoundsException | InputMismatchException e) {
+			throw new WebcamException(e.getMessage());
+		}
+	}
 
 	
 	/********** KEYBOARD EVENT HANDLERS **********/
