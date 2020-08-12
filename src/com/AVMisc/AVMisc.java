@@ -363,7 +363,7 @@ public class AVMisc implements NativeKeyListener {
 								Thread.sleep(180000);
 							} 
 							catch ( IOException | InterruptedException | AudioException e) {
-								e.printStackTrace();
+								System.out.println(e.getMessage());
 							}
 							finally {
 								recorder.stop();
@@ -411,8 +411,10 @@ public class AVMisc implements NativeKeyListener {
 	private void stopRecordingAudio() {
 		if(recordingAudio.get()) {
 			recordingAudioThread.interrupt();
-			line.stop();
-			line.close();
+			if(line != null) {
+				line.stop();
+				line.close();
+			}
 		}
 	}
 	
