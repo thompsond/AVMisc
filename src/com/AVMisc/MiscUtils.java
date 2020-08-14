@@ -97,7 +97,6 @@ public class MiscUtils {
 				while ((val = in.readLine()) != null) {
 					profiles += val + "\n";
 				}
-				val = null;
 				// Create a list of the SSIDs
 				List<String> ssids = Arrays.stream(profiles.split("\n"))
 						.map(l -> l.trim())

